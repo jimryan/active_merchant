@@ -23,6 +23,8 @@ class AuthorizeNetTest < Test::Unit::TestCase
       transaction_identifier: 'transaction123'
     )
 
+    @accept_js_payment_token = ActiveMerchant::Billing::AcceptJSPaymentToken.new('accept_js_token')
+
     @options = {
       order_id: '1',
       billing_address: address,
@@ -129,8 +131,8 @@ class AuthorizeNetTest < Test::Unit::TestCase
     end
   end
 
-  def test_market_type_not_included_for_apple_pay_or_echeck
-    [@check, @apple_pay_payment_token].each do |payment|
+  def test_market_type_not_included_for_apple_pay_echeck_or_accept_js
+    [@check, @apple_pay_payment_token, @accept_js_payment_token].each do |payment|
       stub_comms do
         @gateway.purchase(@amount, payment)
       end.check_request do |endpoint, data, headers|
@@ -245,6 +247,38 @@ class AuthorizeNetTest < Test::Unit::TestCase
       parse(data) do |doc|
         assert_equal @gateway.class::APPLE_PAY_DATA_DESCRIPTOR, doc.at_xpath('//opaqueData/dataDescriptor').content
         assert_equal Base64.strict_encode64(@apple_pay_payment_token.payment_data.to_json), doc.at_xpath('//opaqueData/dataValue').content
+      end
+    end.respond_with(successful_purchase_response)
+
+    assert response
+    assert_instance_of Response, response
+    assert_success response
+    assert_equal '508141795', response.authorization.split('#')[0]
+  end
+
+  def test_successful_accept_js_authorization
+    response = stub_comms do
+      @gateway.authorize(@amount, @accept_js_payment_token)
+    end.check_request do |endpoint, data, headers|
+      parse(data) do |doc|
+        assert_equal @gateway.class::ACCEPT_JS_DATA_DESCRIPTOR, doc.at_xpath('//opaqueData/dataDescriptor').content
+        assert_equal @accept_js_payment_token.payment_data, doc.at_xpath('//opaqueData/dataValue').content
+      end
+    end.respond_with(successful_authorize_response)
+
+    assert response
+    assert_instance_of Response, response
+    assert_success response
+    assert_equal '508141794', response.authorization.split('#')[0]
+  end
+
+  def test_successful_accept_js_purchase
+    response = stub_comms do
+      @gateway.purchase(@amount, @accept_js_payment_token)
+    end.check_request do |endpoint, data, headers|
+      parse(data) do |doc|
+        assert_equal @gateway.class::ACCEPT_JS_DATA_DESCRIPTOR, doc.at_xpath('//opaqueData/dataDescriptor').content
+        assert_equal @accept_js_payment_token.payment_data, doc.at_xpath('//opaqueData/dataValue').content
       end
     end.respond_with(successful_purchase_response)
 
@@ -606,6 +640,22 @@ class AuthorizeNetTest < Test::Unit::TestCase
     assert_equal 'Successful', store.message
     assert_equal '35959426', store.params['customer_profile_id']
     assert_equal '32506918', store.params['customer_payment_profile_id']
+  end
+
+  def test_successful_store_using_accept_js_token
+    response = stub_comms do
+      @gateway.store(@accept_js_payment_token, @options)
+    end.check_request do |endpoint, data, headers|
+      parse(data) do |doc|
+        assert_equal @gateway.class::ACCEPT_JS_DATA_DESCRIPTOR, doc.at_xpath('//payment/opaqueData/dataDescriptor').content
+        assert_equal @accept_js_payment_token.payment_data, doc.at_xpath('//payment/opaqueData/dataValue').content
+      end
+    end.respond_with(successful_store_response)
+
+    assert_success response
+    assert_equal 'Successful', response.message
+    assert_equal '35959426', response.params['customer_profile_id']
+    assert_equal '32506918', response.params['customer_payment_profile_id']
   end
 
   def test_failed_store

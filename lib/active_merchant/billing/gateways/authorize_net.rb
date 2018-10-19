@@ -90,9 +90,16 @@ module ActiveMerchant
       }.freeze
 
       APPLE_PAY_DATA_DESCRIPTOR = 'COMMON.APPLE.INAPP.PAYMENT'
+      ACCEPT_JS_DATA_DESCRIPTOR = 'COMMON.ACCEPT.INAPP.PAYMENT'
 
       PAYMENT_METHOD_NOT_SUPPORTED_ERROR = '155'
       INELIGIBLE_FOR_ISSUING_CREDIT_ERROR = '54'
+
+      class ActiveMerchant::Billing::AcceptJSPaymentToken < PaymentToken
+        def type
+          'accept_js'
+        end
+      end
 
       def initialize(options={})
         requires!(options, :login, :password)
@@ -184,11 +191,11 @@ module ActiveMerchant
         end
       end
 
-      def store(credit_card, options = {})
+      def store(payment_source, options = {})
         if options[:customer_profile_id]
-          create_customer_payment_profile(credit_card, options)
+          create_customer_payment_profile(payment_source, options)
         else
-          create_customer_profile(credit_card, options)
+          create_customer_profile(payment_source, options)
         end
       end
 
@@ -387,6 +394,8 @@ module ActiveMerchant
           add_check(xml, source)
         elsif card_brand(source) == 'apple_pay'
           add_apple_pay_payment_token(xml, source)
+        elsif card_brand(source) == 'accept_js'
+          add_accept_js_payment_token(xml, source)
         else
           add_credit_card(xml, source, action)
         end
@@ -510,8 +519,17 @@ module ActiveMerchant
         end
       end
 
+      def add_accept_js_payment_token(xml, source)
+        xml.payment do
+          xml.opaqueData do
+            xml.dataDescriptor(ACCEPT_JS_DATA_DESCRIPTOR)
+            xml.dataValue(source.payment_data)
+          end
+        end
+      end
+
       def add_market_type_device_type(xml, payment, options)
-        return if payment.is_a?(String) || card_brand(payment) == 'check' || card_brand(payment) == 'apple_pay'
+        return if payment.is_a?(String) || card_brand(payment) == 'check' || card_brand(payment) == 'apple_pay' || card_brand(payment) == 'accept_js'
         if valid_track_data
           xml.retail do
             xml.marketType(options[:market_type] || MARKET_TYPE[:retail])
@@ -696,7 +714,7 @@ module ActiveMerchant
         end
       end
 
-      def create_customer_profile(credit_card, options)
+      def create_customer_profile(payment_source, options)
         commit(:cim_store, options) do |xml|
           xml.profile do
             xml.merchantCustomerId(truncate(options[:merchant_customer_id], 20) || SecureRandom.hex(10))
@@ -705,14 +723,20 @@ module ActiveMerchant
 
             xml.paymentProfiles do
               xml.customerType('individual')
-              add_billing_address(xml, credit_card, options)
+              add_billing_address(xml, payment_source, options)
               add_shipping_address(xml, options, 'shipToList')
-              xml.payment do
-                xml.creditCard do
-                  xml.cardNumber(truncate(credit_card.number, 16))
-                  xml.expirationDate(format(credit_card.year, :four_digits) + '-' + format(credit_card.month, :two_digits))
-                  xml.cardCode(credit_card.verification_value) if credit_card.verification_value
+
+              case payment_source
+              when CreditCard
+                xml.payment do
+                  xml.creditCard do
+                    xml.cardNumber(truncate(payment_source.number, 16))
+                    xml.expirationDate(format(payment_source.year, :four_digits) + '-' + format(payment_source.month, :two_digits))
+                    xml.cardCode(payment_source.verification_value) if payment_source.verification_value
+                  end
                 end
+              when AcceptJSPaymentToken
+                add_accept_js_payment_token(xml, payment_source)
               end
             end
           end
